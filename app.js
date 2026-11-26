@@ -26,24 +26,14 @@ let facturasGlobales = [];
 let facturasAnualesModelo130 = [];
 let facturaEditandoId = null;
 
-// Cuenta permitida en la interfaz de esta versión de pruebas.
-// IMPORTANTE: esta comprobación no sustituye a las reglas de seguridad de Firebase.
-const CUENTA_PRUEBAS_AUTORIZADA = 'sa@sa.com';
+// El acceso se controla mediante Firebase Authentication y las reglas de Firestore.
+// Cada usuario consulta y modifica únicamente los documentos asociados a su UID.
 
 // Escuchador del Estado de la Sesión
 auth.onAuthStateChanged(async (user) => {
   const authContainer = document.getElementById('authContainer');
   const appContainer = document.getElementById('appContainer');
   const errorEl = document.getElementById('authError');
-
-  if (user && String(user.email || '').trim().toLowerCase() !== CUENTA_PRUEBAS_AUTORIZADA) {
-    authContainer.classList.remove('hidden');
-    appContainer.classList.add('hidden');
-    errorEl.classList.remove('hidden');
-    errorEl.innerText = 'Esta versión de pruebas solo permite el acceso con la cuenta sa@sa.com.';
-    await auth.signOut();
-    return;
-  }
 
   if (user) {
     errorEl.classList.add('hidden');
@@ -84,12 +74,6 @@ async function procesarAuth(e) {
   if (modoRegistro) {
     errorEl.classList.remove('hidden');
     errorEl.innerText = 'El registro de nuevas cuentas está deshabilitado en esta versión de pruebas.';
-    return;
-  }
-
-  if (String(email || '').trim().toLowerCase() !== CUENTA_PRUEBAS_AUTORIZADA) {
-    errorEl.classList.remove('hidden');
-    errorEl.innerText = 'Esta versión de pruebas solo permite el acceso con la cuenta sa@sa.com.';
     return;
   }
 

@@ -1,0 +1,478 @@
+
+// 1. Configuración de Firebase
+const firebaseConfig = {
+  apiKey: "AIzaSyBlPqHe_RhlesKTNWRmzHaBdlq_8nMQjVI",
+  authDomain: "facturacion-5a21f.firebaseapp.com",
+  projectId: "facturacion-5a21f",
+  storageBucket: "facturacion-5a21f.firebasestorage.app",
+  messagingSenderId: "993707105032",
+  appId: "1:993707105032:web:620a0a852b7399e7bd6abd",
+  measurementId: "G-CCM8GCP49Q"
+};
+
+// Inicialización
+const app = firebase.initializeApp(firebaseConfig);
+
+let analytics;
+if (typeof firebase.analytics === 'function') {
+  analytics = firebase.analytics();
+}
+
+const auth = firebase.auth();
+const db = firebase.firestore();
+const storage = firebase.storage();
+
+let modoRegistro = false;
+let facturasGlobales = [];
+let facturasAnualesModelo130 = [];
+let facturaEditandoId = null;
+
+// Escuchador del Estado de la Sesión
+auth.onAuthStateChanged((user) => {
+  const authContainer = document.getElementById('authContainer');
+  const appContainer = document.getElementById('appContainer');
+
+  if (user) {
+    authContainer.classList.add('hidden');
+    appContainer.classList.remove('hidden');
+    document.getElementById('userInfo').innerText = user.email;
+
+    const anioActual = new Date().getFullYear().toString();
+    const selectAnio = document.getElementById('anioSelect');
+    if (selectAnio.querySelector(`option[value="${anioActual}"]`)) {
+      selectAnio.value = anioActual;
+    }
+    actualizarAnioNav();
+    cargarDatosTrimestre();
+
+  } else {
+    authContainer.classList.remove('hidden');
+    appContainer.classList.add('hidden');
+  }
+});
+
+// Autenticación
+function alternarModoAuth() {
+  modoRegistro = !modoRegistro;
+  const btnSubmit = document.getElementById('btnAuthSubmit');
+  const btnToggle = document.getElementById('btnAuthToggle');
+  const toggleText = document.getElementById('authToggleText');
+  const errorEl = document.getElementById('authError');
+
+  errorEl.classList.add('hidden');
+
+  if (modoRegistro) {
+    btnSubmit.innerText = "Crear Cuenta";
+    toggleText.innerText = "¿Ya tienes una cuenta?";
+    btnToggle.innerText = "Iniciar Sesión";
+  } else {
+    btnSubmit.innerText = "Iniciar Sesión";
+    toggleText.innerText = "¿No tienes cuenta de usuario?";
+    btnToggle.innerText = "Registrarse";
+  }
+}
+
+async function procesarAuth(e) {
+  e.preventDefault();
+  const email = document.getElementById('authEmail').value;
+  const password = document.getElementById('authPassword').value;
+  const errorEl = document.getElementById('authError');
+  const btnSubmit = document.getElementById('btnAuthSubmit');
+
+  errorEl.classList.add('hidden');
+  btnSubmit.disabled = true;
+
+  try {
+    if (modoRegistro) {
+      await auth.createUserWithEmailAndPassword(email, password);
+    } else {
+      await auth.signInWithEmailAndPassword(email, password);
+    }
+  } catch (error) {
+    errorEl.classList.remove('hidden');
+    if (error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
+      errorEl.innerText = "Correo o contraseña incorrectos.";
+    } else if (error.code === 'auth/email-already-in-use') {
+      errorEl.innerText = "El correo ya está registrado.";
+    } else if (error.code === 'auth/weak-password') {
+      errorEl.innerText = "La contraseña debe tener al menos 6 caracteres.";
+    } else {
+      errorEl.innerText = error.message;
+    }
+  } finally {
+    btnSubmit.disabled = false;
+  }
+}
+
+function cerrarSesion() {
+  auth.signOut();
+}
+
+function actualizarAnioNav() {
+  const anio = document.getElementById('anioSelect').value;
+  document.getElementById('labelAnioNav').innerText = anio;
+}
+
+// Cargar datos desde Firestore
+async function cargarDatosTrimestre() {
+  const user = auth.currentUser;
+  if (!user) return;
+
+  const anio = document.getElementById('anioSelect').value;
+  const trimestre = document.getElementById('trimestreSelect').value;
+
+  try {
+    // Se cargan todas las facturas del año para el cálculo acumulado del Modelo 130.
+    // Las tablas mantienen el filtro del trimestre seleccionado.
+    const snapshot = await db.collection('facturas')
+      .where('userId', '==', user.uid)
+      .where('anio', '==', anio)
+      .get();
+
+    facturasAnualesModelo130 = snapshot.docs.map(doc => ({
+      id: doc.id,
+      ...doc.data()
+    }));
+
+    facturasGlobales = facturasAnualesModelo130.filter(f => f.trimestre === trimestre);
+
+    // ORDENAR FACTURAS POR NÚMERO ASCENDENTE
+    // El comparador numérico permite ordenar correctamente:
+    // 1, 2, 3... 9, 10, 11, 12...
+    const comparadorNumerico = new Intl.Collator('es', {
+      numeric: true,
+      sensitivity: 'base'
+    });
+
+    facturasGlobales.sort((a, b) => {
+      const numeroA = String(a.numero ?? '').trim();
+      const numeroB = String(b.numero ?? '').trim();
+
+      const ordenNumero = comparadorNumerico.compare(
+        numeroA,
+        numeroB
+      );
+
+      if (ordenNumero !== 0) {
+        return ordenNumero;
+      }
+
+      // Si coinciden los números, ordenar por fecha
+      return String(a.fecha ?? '').localeCompare(
+        String(b.fecha ?? '')
+      );
+    });
+
+    renderizarTablasYTotales();
+
+  } catch (error) {
+    console.error("Error al cargar facturas:", error);
+  }
+}
+
+// Renderizado de Tablas y Cálculo de Totales
+function renderizarTablasYTotales() {
+  const tablaEmitidas = document.getElementById('tablaEmitidas');
+  const tablaRecibidas = document.getElementById('tablaRecibidas');
+
+  tablaEmitidas.innerHTML = '';
+  tablaRecibidas.innerHTML = '';
+
+  let vBase = 0, vIva = 0, gBase = 0, gIva = 0, totalIrpf = 0;
+
+  facturasGlobales.forEach(f => {
+    if (f.tipo === 'emitida') {
+      vBase += f.base;
+      vIva += f.cuotaIva;
+      totalIrpf += f.cuotaIrpf;
+
+      tablaEmitidas.innerHTML += `
+        <tr class="border-b text-xs hover:bg-slate-50">
+          <td class="p-2 font-medium">${f.numero}<br><span class="text-slate-400">${f.fecha}</span></td>
+          <td class="p-2">${f.tercero}</td>
+          <td class="p-2">${f.base.toFixed(2)} €</td>
+          <td class="p-2">${f.cuotaIva.toFixed(2)} €</td>
+          <td class="p-2 font-bold">${f.total.toFixed(2)} €</td>
+          <td class="p-2 text-center space-x-2">
+            <button onclick="abrirModalFactura('${f.tipo}', '${f.id}')" class="text-indigo-600 hover:text-indigo-800 font-bold" title="Editar">✏️</button>
+            <button onclick="eliminarFactura('${f.id}')" class="text-red-600 hover:text-red-800 font-bold" title="Eliminar">🗑️</button>
+          </td>
+        </tr>
+      `;
+    } else {
+      gBase += f.base;
+      gIva += f.cuotaIva;
+
+      const adjuntoHtml = f.adjuntoUrl
+        ? `<a href="${f.adjuntoUrl}" target="_blank" class="text-indigo-600 underline font-semibold">Ver Doc</a>`
+        : '-';
+
+      tablaRecibidas.innerHTML += `
+        <tr class="border-b text-xs hover:bg-slate-50">
+          <td class="p-2 font-medium">${f.fecha}<br><span class="text-slate-400">${f.numero}</span></td>
+          <td class="p-2">${f.tercero}</td>
+          <td class="p-2">${f.base.toFixed(2)} €</td>
+          <td class="p-2">${f.cuotaIva.toFixed(2)} €</td>
+          <td class="p-2">${adjuntoHtml}</td>
+          <td class="p-2 text-center space-x-2">
+            <button onclick="abrirModalFactura('${f.tipo}', '${f.id}')" class="text-indigo-600 hover:text-indigo-800 font-bold" title="Editar">✏️</button>
+            <button onclick="eliminarFactura('${f.id}')" class="text-red-600 hover:text-red-800 font-bold" title="Eliminar">🗑️</button>
+          </td>
+        </tr>
+      `;
+    }
+  });
+
+  document.getElementById('totalVentasBase').innerText = `${vBase.toFixed(2)} €`;
+  document.getElementById('totalVentasIva').innerText = `${vIva.toFixed(2)} €`;
+  document.getElementById('totalGastosBase').innerText = `${gBase.toFixed(2)} €`;
+  document.getElementById('totalGastosIva').innerText = `${gIva.toFixed(2)} €`;
+  document.getElementById('totalIrpf').innerText = `${totalIrpf.toFixed(2)} €`;
+
+  actualizarModelo130();
+
+  const res303 = vIva - gIva;
+  const res303El = document.getElementById('resultado303');
+  res303El.innerText = `${res303.toFixed(2)} €`;
+
+  const card = document.getElementById('cardLiquidacion');
+  if (res303 >= 0) {
+    card.className = "bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm";
+    document.getElementById('resultado303Label').innerText = "A pagar a Hacienda (Ingreso)";
+  } else {
+    card.className = "bg-emerald-50 p-4 rounded-xl border border-emerald-200 shadow-sm";
+    document.getElementById('resultado303Label').innerText = "A compensar / devolver";
+  }
+}
+
+// Cálculo orientativo y acumulado del Modelo 130
+function actualizarModelo130() {
+  const anio = document.getElementById('anioSelect').value;
+  const trimestre = document.getElementById('trimestreSelect').value;
+  const regimen = document.getElementById('regimenFiscal').value;
+  const cierresTrimestre = {
+    '1T': anio + '-03-31',
+    '2T': anio + '-06-30',
+    '3T': anio + '-09-30',
+    '4T': anio + '-12-31'
+  };
+  const fechaFin = cierresTrimestre[trimestre];
+
+  // El cálculo acumula desde el 1 de enero hasta el cierre del trimestre.
+  const facturasAcumuladas = facturasAnualesModelo130.filter(f => f.fecha && f.fecha <= fechaFin);
+  let ventas = 0;
+  let gastos = 0;
+  let retenciones = 0;
+
+  facturasAcumuladas.forEach(f => {
+    const base = Number(f.base) || 0;
+    if (f.tipo === 'emitida') {
+      ventas += base;
+      retenciones += Number(f.cuotaIrpf) || 0;
+    } else if (f.tipo === 'recibida') {
+      gastos += base;
+    }
+  });
+
+  const rendimiento = ventas - gastos;
+  const rendimientoPositivo = Math.max(0, rendimiento);
+  const gastoDificilJustificacion = Math.min(rendimientoPositivo * 0.05, 2000);
+  const rendimientoSimplificada = rendimiento - gastoDificilJustificacion;
+  const cuotaNormal = rendimientoPositivo * 0.20;
+  const cuotaSimplificada = Math.max(0, rendimientoSimplificada) * 0.20;
+
+  // Se descuentan las retenciones soportadas. El resultado puede ser negativo.
+  // No se restan pagos fraccionados anteriores porque la aplicación aún no los registra.
+  const resultadoNormal = cuotaNormal - retenciones;
+  const resultadoSimplificada = cuotaSimplificada - retenciones;
+  const euros = valor => (Number(valor) || 0).toLocaleString('es-ES', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  }) + ' €';
+
+  document.getElementById('modelo130NormalRendimiento').innerText = euros(rendimiento);
+  document.getElementById('modelo130NormalCuota').innerText = euros(cuotaNormal);
+  document.getElementById('modelo130NormalResultado').innerText = euros(resultadoNormal);
+  document.getElementById('modelo130SimplificadaRendimiento').innerText = euros(rendimientoSimplificada);
+  document.getElementById('modelo130SimplificadaCuota').innerText = euros(cuotaSimplificada);
+  document.getElementById('modelo130SimplificadaResultado').innerText = euros(resultadoSimplificada);
+  document.getElementById('modelo130Ventas').innerText = euros(ventas);
+  document.getElementById('modelo130Gastos').innerText = euros(gastos);
+  document.getElementById('modelo130Retenciones').innerText = euros(retenciones);
+
+  const esSimplificada = regimen === 'simplificada';
+  document.getElementById('modelo130RegimenLabel').innerText = esSimplificada
+    ? 'Estimación directa simplificada · importe estimado'
+    : 'Estimación directa normal · importe estimado';
+  document.getElementById('modelo130Resultado').innerText = euros(
+    esSimplificada ? resultadoSimplificada : resultadoNormal
+  );
+  document.getElementById('modelo130Ajuste').innerText = esSimplificada
+    ? 'Gasto de difícil justificación aplicado: ' + euros(gastoDificilJustificacion) + ' (5%, máximo 2.000 € al año).'
+    : 'No se aplica el gasto del 5% por difícil justificación en estimación directa normal.';
+}
+
+// Modal de Crear / Editar
+function abrirModalFactura(tipo, id = null) {
+  const form = document.getElementById('formFactura');
+  form.reset();
+
+  facturaEditandoId = id;
+  document.getElementById('facturaTipo').value = tipo;
+
+  if (id) {
+    const factura = facturasGlobales.find(f => f.id === id);
+    if (!factura) return;
+
+    document.getElementById('modalTitle').innerText = 'Editar Factura';
+    document.getElementById('facturaFecha').value = factura.fecha;
+    document.getElementById('facturaNumero').value = factura.numero;
+    document.getElementById('facturaTercero').value = factura.tercero;
+    document.getElementById('facturaNif').value = factura.nif;
+    document.getElementById('facturaBase').value = factura.base;
+    document.getElementById('facturaIvaPct').value = factura.ivaPct;
+    document.getElementById('facturaIrpfPct').value = factura.irpfPct;
+    document.getElementById('facturaTotal').value = factura.total.toFixed(2);
+  } else {
+    document.getElementById('modalTitle').innerText = tipo === 'emitida'
+      ? 'Registrar Venta (Factura Emitida)'
+      : 'Registrar Gasto (Factura Recibida)';
+    document.getElementById('facturaFecha').value = new Date().toISOString().split('T')[0];
+  }
+
+  document.getElementById('modalFactura').classList.remove('hidden');
+}
+
+function cerrarModalFactura() {
+  document.getElementById('modalFactura').classList.add('hidden');
+  facturaEditandoId = null;
+}
+
+function calcularTotalesModal() {
+  const base = parseFloat(document.getElementById('facturaBase').value) || 0;
+  const ivaPct = parseFloat(document.getElementById('facturaIvaPct').value) || 0;
+  const irpfPct = parseFloat(document.getElementById('facturaIrpfPct').value) || 0;
+
+  const cuotaIva = base * (ivaPct / 100);
+  const cuotaIrpf = base * (irpfPct / 100);
+  const total = base + cuotaIva - cuotaIrpf;
+
+  document.getElementById('facturaTotal').value = total.toFixed(2);
+}
+
+// Guardar (Crear / Actualizar)
+async function guardarFactura(e) {
+  e.preventDefault();
+  const user = auth.currentUser;
+  if (!user) return;
+
+  const btnGuardar = document.getElementById('btnGuardar');
+  btnGuardar.disabled = true;
+  btnGuardar.innerText = "Guardando...";
+
+  const tipo = document.getElementById('facturaTipo').value;
+  const fecha = document.getElementById('facturaFecha').value;
+  const base = parseFloat(document.getElementById('facturaBase').value) || 0;
+  const ivaPct = parseFloat(document.getElementById('facturaIvaPct').value) || 0;
+  const irpfPct = parseFloat(document.getElementById('facturaIrpfPct').value) || 0;
+
+  const cuotaIva = base * (ivaPct / 100);
+  const cuotaIrpf = base * (irpfPct / 100);
+  const total = base + cuotaIva - cuotaIrpf;
+
+  const fechaObj = new Date(fecha);
+  const anio = fechaObj.getFullYear().toString();
+  const mes = fechaObj.getMonth() + 1;
+
+  let trimestre = '1T';
+  if (mes >= 4 && mes <= 6) trimestre = '2T';
+  if (mes >= 7 && mes <= 9) trimestre = '3T';
+  if (mes >= 10) trimestre = '4T';
+
+  try {
+    const datosFactura = {
+      userId: user.uid,
+      tipo,
+      fecha,
+      anio,
+      trimestre,
+      numero: document.getElementById('facturaNumero').value,
+      tercero: document.getElementById('facturaTercero').value,
+      nif: document.getElementById('facturaNif').value,
+      base,
+      ivaPct,
+      cuotaIva,
+      irpfPct,
+      cuotaIrpf,
+      total,
+      updatedAt: firebase.firestore.FieldValue.serverTimestamp()
+    };
+
+    const fileInput = document.getElementById('facturaAdjunto');
+    if (fileInput.files.length > 0) {
+      const file = fileInput.files[0];
+      const storageRef = storage.ref(`adjuntos/${user.uid}/${anio}/${Date.now()}_${file.name}`);
+      await storageRef.put(file);
+      datosFactura.adjuntoUrl = await storageRef.getDownloadURL();
+    }
+
+    if (facturaEditandoId) {
+      await db.collection('facturas').doc(facturaEditandoId).update(datosFactura);
+    } else {
+      datosFactura.createdAt = firebase.firestore.FieldValue.serverTimestamp();
+      await db.collection('facturas').add(datosFactura);
+    }
+
+    document.getElementById('anioSelect').value = anio;
+    document.getElementById('trimestreSelect').value = trimestre;
+    actualizarAnioNav();
+
+    cerrarModalFactura();
+    await cargarDatosTrimestre();
+
+  } catch (error) {
+    console.error("Error al guardar:", error);
+    alert("Error al guardar la factura: " + error.message);
+  } finally {
+    btnGuardar.disabled = false;
+    btnGuardar.innerText = "Guardar";
+  }
+}
+
+// Eliminar Factura
+async function eliminarFactura(id) {
+  if (!confirm("¿Estás seguro de que deseas eliminar esta factura?")) return;
+
+  try {
+    await db.collection('facturas').doc(id).delete();
+    await cargarDatosTrimestre();
+  } catch (error) {
+    console.error("Error al eliminar la factura:", error);
+    alert("Error al eliminar: " + error.message);
+  }
+}
+
+// Exportar CSV
+function exportarExcelGestoria() {
+  if (facturasGlobales.length === 0) {
+    alert("No hay facturas registradas en el período seleccionado.");
+    return;
+  }
+
+  const anio = document.getElementById('anioSelect').value;
+  const trimestre = document.getElementById('trimestreSelect').value;
+
+  let csvContent = "data:text/csv;charset=utf-8,TIPO;FECHA;NUMERO;NIF;TERCERO;BASE;% IVA;CUOTA IVA;% IRPF;RETENCION IRPF;TOTAL\n";
+
+  facturasGlobales.forEach(f => {
+    csvContent += `${f.tipo.toUpperCase()};${f.fecha};${f.numero};${f.nif};"${f.tercero}";${f.base};${f.ivaPct}%;${f.cuotaIva};${f.irpfPct}%;${f.cuotaIrpf};${f.total}\n`;
+  });
+
+  const encodedUri = encodeURI(csvContent);
+  const link = document.createElement("a");
+  link.setAttribute("href", encodedUri);
+  link.setAttribute("download", `Facturacion_Gestoria_${anio}_${trimestre}.csv`);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+}

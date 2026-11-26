@@ -27,12 +27,27 @@ let facturasGlobales = [];
 let facturasAnualesModelo130 = [];
 let facturaEditandoId = null;
 
+// Cuenta permitida en la interfaz de esta versión de pruebas.
+// IMPORTANTE: esta comprobación no sustituye a las reglas de seguridad de Firebase.
+const CUENTA_PRUEBAS_AUTORIZADA = 'sa@sa.com';
+
 // Escuchador del Estado de la Sesión
-auth.onAuthStateChanged((user) => {
+auth.onAuthStateChanged(async (user) => {
   const authContainer = document.getElementById('authContainer');
   const appContainer = document.getElementById('appContainer');
+  const errorEl = document.getElementById('authError');
+
+  if (user && String(user.email || '').trim().toLowerCase() !== CUENTA_PRUEBAS_AUTORIZADA) {
+    authContainer.classList.remove('hidden');
+    appContainer.classList.add('hidden');
+    errorEl.classList.remove('hidden');
+    errorEl.innerText = 'Esta versión de pruebas solo permite el acceso con la cuenta sa@sa.com.';
+    await auth.signOut();
+    return;
+  }
 
   if (user) {
+    errorEl.classList.add('hidden');
     authContainer.classList.add('hidden');
     appContainer.classList.remove('hidden');
     document.getElementById('userInfo').innerText = user.email;
@@ -51,25 +66,11 @@ auth.onAuthStateChanged((user) => {
   }
 });
 
-// Autenticación
+// Autenticación: el registro de cuentas está deshabilitado en esta versión.
 function alternarModoAuth() {
-  modoRegistro = !modoRegistro;
-  const btnSubmit = document.getElementById('btnAuthSubmit');
-  const btnToggle = document.getElementById('btnAuthToggle');
-  const toggleText = document.getElementById('authToggleText');
   const errorEl = document.getElementById('authError');
-
-  errorEl.classList.add('hidden');
-
-  if (modoRegistro) {
-    btnSubmit.innerText = "Crear Cuenta";
-    toggleText.innerText = "¿Ya tienes una cuenta?";
-    btnToggle.innerText = "Iniciar Sesión";
-  } else {
-    btnSubmit.innerText = "Iniciar Sesión";
-    toggleText.innerText = "¿No tienes cuenta de usuario?";
-    btnToggle.innerText = "Registrarse";
-  }
+  errorEl.classList.remove('hidden');
+  errorEl.innerText = 'El registro de nuevas cuentas está deshabilitado en esta versión de pruebas.';
 }
 
 async function procesarAuth(e) {
@@ -80,14 +81,23 @@ async function procesarAuth(e) {
   const btnSubmit = document.getElementById('btnAuthSubmit');
 
   errorEl.classList.add('hidden');
+
+  if (modoRegistro) {
+    errorEl.classList.remove('hidden');
+    errorEl.innerText = 'El registro de nuevas cuentas está deshabilitado en esta versión de pruebas.';
+    return;
+  }
+
+  if (String(email || '').trim().toLowerCase() !== CUENTA_PRUEBAS_AUTORIZADA) {
+    errorEl.classList.remove('hidden');
+    errorEl.innerText = 'Esta versión de pruebas solo permite el acceso con la cuenta sa@sa.com.';
+    return;
+  }
+
   btnSubmit.disabled = true;
 
   try {
-    if (modoRegistro) {
-      await auth.createUserWithEmailAndPassword(email, password);
-    } else {
-      await auth.signInWithEmailAndPassword(email, password);
-    }
+    await auth.signInWithEmailAndPassword(email, password);
   } catch (error) {
     errorEl.classList.remove('hidden');
     if (error.code === 'auth/wrong-password' || error.code === 'auth/user-not-found' || error.code === 'auth/invalid-credential') {
@@ -124,15 +134,24 @@ async function cargarDatosTrimestre() {
   try {
     // Se cargan todas las facturas del año para el cálculo acumulado del Modelo 130.
     // Las tablas mantienen el filtro del trimestre seleccionado.
+    // Se consultan únicamente las facturas del usuario autenticado.
+    // El año se filtra en JavaScript para admitir tanto valores antiguos numéricos
+    // (2026) como valores de texto ("2026"). La fecha de la factura tiene prioridad.
     const snapshot = await db.collection('facturas')
       .where('userId', '==', user.uid)
-      .where('anio', '==', anio)
       .get();
 
-    facturasAnualesModelo130 = snapshot.docs.map(doc => ({
-      id: doc.id,
-      ...doc.data()
-    }));
+    facturasAnualesModelo130 = snapshot.docs
+      .map(doc => ({
+        id: doc.id,
+        ...doc.data()
+      }))
+      .filter(f => {
+        const anioFactura = f.fecha
+          ? String(f.fecha).slice(0, 4)
+          : String(f.anio ?? '');
+        return anioFactura === String(anio);
+      });
 
     facturasGlobales = facturasAnualesModelo130.filter(f => f.trimestre === trimestre);
 

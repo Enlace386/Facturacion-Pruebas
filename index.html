@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gestión de Facturación</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  
+  <!-- Firebase SDKs (v10 Compat) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-auth-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-storage-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-analytics-compat.js"></script>
+</head>
+<body class="bg-slate-100 font-sans text-slate-800">
+
+  <!-- VISTA DE AUTENTICACIÓN -->
+  <div id="authContainer" class="min-h-screen flex items-center justify-center p-4">
+    <div class="bg-white p-8 rounded-2xl shadow-xl w-full max-w-md border border-slate-200">
+      <h2 class="text-2xl font-bold text-center text-slate-800 mb-6" id="authTitle">Gestión de Facturación</h2>
+      
+      <form onsubmit="procesarAuth(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Correo Electrónico</label>
+          <input type="email" id="authEmail" required class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Contraseña</label>
+          <input type="password" id="authPassword" required class="w-full border rounded-lg p-2.5 text-sm focus:ring-2 focus:ring-indigo-500 outline-none">
+        </div>
+        <p id="authError" class="text-red-500 text-xs hidden"></p>
+        <button type="submit" id="btnAuthSubmit" class="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium py-2.5 rounded-lg text-sm shadow">Iniciar Sesión</button>
+      </form>
+
+      <div class="mt-6 text-center text-xs text-slate-500">
+        <span id="authToggleText">¿No tienes cuenta de usuario?</span>
+        <button onclick="alternarModoAuth()" id="btnAuthToggle" class="text-indigo-600 font-semibold ml-1 underline">Registrarse</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- VISTA PRINCIPAL DEL PANEL -->
+  <div id="appContainer" class="hidden min-h-screen pb-12">
+    <!-- Navbar -->
+    <nav class="bg-white border-b border-slate-200 px-6 py-4 flex flex-wrap justify-between items-center gap-4">
+      <div class="flex items-center space-x-3">
+        <span class="text-xl font-bold text-indigo-600">FacturaApp</span>
+        <span class="bg-indigo-50 text-indigo-700 text-xs font-bold px-2.5 py-1 rounded-full" id="labelAnioNav">2026</span>
+      </div>
+      <div class="flex items-center space-x-4">
+        <span id="userInfo" class="text-xs text-slate-500 font-medium"></span>
+        <button onclick="cerrarSesion()" class="text-xs text-red-600 hover:text-red-800 font-semibold border border-red-200 px-3 py-1.5 rounded-lg hover:bg-red-50">Cerrar Sesión</button>
+      </div>
+    </nav>
+
+    <main class="max-w-7xl mx-auto px-4 mt-6 space-y-6">
+      
+      <!-- Filtros de Período y Acciones -->
+      <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200 flex flex-wrap justify-between items-center gap-4">
+        <div class="flex items-center space-x-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1">Año</label>
+            <select id="anioSelect" onchange="actualizarAnioNav(); cargarDatosTrimestre();" class="border rounded-lg p-2 text-xs font-medium outline-none">
+              <option value="2024">2024</option>
+              <option value="2025">2025</option>
+              <option value="2026" selected>2026</option>
+              <option value="2027">2027</option>
+            </select>
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-500 mb-1">Trimestre</label>
+            <select id="trimestreSelect" onchange="cargarDatosTrimestre();" class="border rounded-lg p-2 text-xs font-medium outline-none">
+              <option value="1T">1T (Ene - Mar)</option>
+              <option value="2T">2T (Abr - Jun)</option>
+              <option value="3T">3T (Jul - Sep)</option>
+              <option value="4T">4T (Oct - Dic)</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="flex flex-wrap gap-2">
+          <button onclick="abrirModalFactura('emitida')" class="bg-emerald-600 hover:bg-emerald-700 text-white px-3 py-2 rounded-lg text-xs font-medium shadow">+ Venta (Emitida)</button>
+          <button onclick="abrirModalFactura('recibida')" class="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-2 rounded-lg text-xs font-medium shadow">+ Gasto (Recibida)</button>
+          <button onclick="exportarExcelGestoria()" class="bg-slate-800 hover:bg-slate-900 text-white px-3 py-2 rounded-lg text-xs font-medium shadow">Exportar CSV</button>
+        </div>
+      </div>
+
+      <!-- Tarjetas de Resumen Fiscal -->
+      <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p class="text-xs text-slate-500 font-medium">Ventas (Base / IVA)</p>
+          <p class="text-lg font-bold text-slate-800" id="totalVentasBase">0.00 €</p>
+          <p class="text-xs text-emerald-600 font-semibold" id="totalVentasIva">0.00 € IVA</p>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p class="text-xs text-slate-500 font-medium">Gastos (Base / IVA)</p>
+          <p class="text-lg font-bold text-slate-800" id="totalGastosBase">0.00 €</p>
+          <p class="text-xs text-rose-600 font-semibold" id="totalGastosIva">0.00 € IVA</p>
+        </div>
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <p class="text-xs text-slate-500 font-medium">IRPF retenido por clientes</p>
+          <p class="text-lg font-bold text-slate-800" id="totalIrpf">0.00 €</p>
+          <p class="text-xs text-slate-400 font-medium">Retenciones en facturas emitidas</p>
+        </div>
+        <div id="cardLiquidacion" class="bg-amber-50 p-4 rounded-xl border border-amber-200 shadow-sm">
+          <p class="text-xs text-amber-800 font-semibold">Liquidación IVA (Mod. 303)</p>
+          <p class="text-lg font-bold text-amber-900" id="resultado303">0.00 €</p>
+          <p class="text-xs text-amber-700 font-medium" id="resultado303Label">A pagar a Hacienda</p>
+        </div>
+      </div>
+
+      <!-- Cálculo orientativo del Modelo 130 -->
+      <section class="bg-white p-5 rounded-xl border border-slate-200 shadow-sm space-y-4">
+        <div class="flex flex-wrap justify-between items-start gap-3">
+          <div>
+            <h2 class="text-base font-bold text-slate-800">Modelo 130 · Comparativa de estimación directa</h2>
+            <p class="text-xs text-slate-500 mt-1">Cálculo acumulado desde enero hasta el final del trimestre seleccionado</p>
+          </div>
+          <div class="min-w-56">
+            <label for="regimenFiscal" class="block text-xs font-semibold text-slate-600 mb-1">Mi régimen fiscal</label>
+            <select id="regimenFiscal" onchange="actualizarModelo130()" class="w-full border rounded-lg p-2 text-xs font-medium outline-none focus:ring-2 focus:ring-indigo-500">
+              <option value="simplificada" selected>Estimación directa simplificada</option>
+              <option value="normal">Estimación directa normal</option>
+            </select>
+          </div>
+        </div>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div class="rounded-lg border border-slate-200 p-4">
+            <h3 class="text-sm font-bold text-slate-700">Estimación directa normal</h3>
+            <p class="text-xs text-slate-500 mt-1">Sin el gasto adicional del 5% por difícil justificación</p>
+            <p class="text-xs text-slate-500 mt-3">Rendimiento neto acumulado</p>
+            <p class="text-lg font-bold text-slate-800" id="modelo130NormalRendimiento">0,00 €</p>
+            <p class="text-xs text-slate-500 mt-2">20% del rendimiento</p>
+            <p class="text-base font-semibold text-slate-800" id="modelo130NormalCuota">0,00 €</p>
+            <p class="text-xs text-slate-500 mt-2">Estimación tras retenciones</p>
+            <p class="text-sm font-bold text-indigo-700" id="modelo130NormalResultado">0,00 €</p>
+          </div>
+          <div class="rounded-lg border border-indigo-200 bg-indigo-50/40 p-4">
+            <h3 class="text-sm font-bold text-indigo-800">Estimación directa simplificada</h3>
+            <p class="text-xs text-slate-500 mt-1">Aplica el 5% de difícil justificación, con límite anual de 2.000 €</p>
+            <p class="text-xs text-slate-500 mt-3">Rendimiento tras el ajuste del 5%</p>
+            <p class="text-lg font-bold text-slate-800" id="modelo130SimplificadaRendimiento">0,00 €</p>
+            <p class="text-xs text-slate-500 mt-2">20% del rendimiento ajustado</p>
+            <p class="text-base font-semibold text-slate-800" id="modelo130SimplificadaCuota">0,00 €</p>
+            <p class="text-xs text-slate-500 mt-2">Estimación tras retenciones</p>
+            <p class="text-sm font-bold text-indigo-700" id="modelo130SimplificadaResultado">0,00 €</p>
+          </div>
+        </div>
+        <div class="rounded-lg bg-slate-50 border border-slate-200 p-4">
+          <h3 class="text-sm font-bold text-slate-700">Resultado según el régimen seleccionado</h3>
+          <div class="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-3">
+            <div><p class="text-xs text-slate-500">Ventas acumuladas (base)</p><p class="font-semibold text-slate-800" id="modelo130Ventas">0,00 €</p></div>
+            <div><p class="text-xs text-slate-500">Gastos acumulados (base)</p><p class="font-semibold text-slate-800" id="modelo130Gastos">0,00 €</p></div>
+            <div><p class="text-xs text-slate-500">Retenciones en facturas emitidas</p><p class="font-semibold text-slate-800" id="modelo130Retenciones">0,00 €</p></div>
+          </div>
+          <div class="mt-4 pt-3 border-t border-slate-200 flex flex-wrap justify-between items-center gap-2">
+            <div><p class="text-xs text-slate-500" id="modelo130RegimenLabel">Estimación directa simplificada</p><p class="text-2xl font-bold text-indigo-700" id="modelo130Resultado">0,00 €</p></div>
+            <p class="text-xs text-slate-500 max-w-xl" id="modelo130Ajuste">Gasto de difícil justificación aplicado: 0,00 €</p>
+          </div>
+        </div>
+        <p class="text-xs text-slate-500 leading-relaxed">Cálculo orientativo: utiliza las bases de ventas y gastos registradas desde enero hasta el cierre del trimestre. El resultado descuenta las retenciones de IRPF de las facturas emitidas, pero todavía no resta los pagos fraccionados de trimestres anteriores ni contempla otros ajustes fiscales. No sustituye al cálculo definitivo de la AEAT.</p>
+      </section>
+
+      <!-- Tablas de Datos -->
+      <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <!-- Tabla Emitidas -->
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <h3 class="text-sm font-bold text-slate-700 mb-3">Facturas Emitidas (Ventas)</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b text-slate-400 text-[10px] uppercase tracking-wider">
+                  <th class="p-2">Nº / Fecha</th>
+                  <th class="p-2">Cliente</th>
+                  <th class="p-2">Base</th>
+                  <th class="p-2">IVA</th>
+                  <th class="p-2">Total</th>
+                  <th class="p-2 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tablaEmitidas"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Tabla Recibidas -->
+        <div class="bg-white p-4 rounded-xl border border-slate-200 shadow-sm">
+          <h3 class="text-sm font-bold text-slate-700 mb-3">Facturas Recibidas (Gastos)</h3>
+          <div class="overflow-x-auto">
+            <table class="w-full text-left border-collapse">
+              <thead>
+                <tr class="border-b text-slate-400 text-[10px] uppercase tracking-wider">
+                  <th class="p-2">Fecha / Nº</th>
+                  <th class="p-2">Proveedor</th>
+                  <th class="p-2">Base</th>
+                  <th class="p-2">IVA</th>
+                  <th class="p-2">Doc</th>
+                  <th class="p-2 text-center">Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tablaRecibidas"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </main>
+  </div>
+
+  <!-- MODAL DE FACTURA (CREAR / EDITAR) -->
+  <div id="modalFactura" class="fixed inset-0 bg-slate-900/50 hidden backdrop-blur-sm flex items-center justify-center p-4 z-50">
+    <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+      <h3 class="text-lg font-bold text-slate-800" id="modalTitle">Registrar Factura</h3>
+      
+      <form onsubmit="guardarFactura(event)" id="formFactura" class="space-y-3">
+        <input type="hidden" id="facturaTipo">
+        
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Fecha</label>
+            <input type="date" id="facturaFecha" required class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Número Factura</label>
+            <input type="text" id="facturaNumero" required placeholder="F-2026-001" class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Cliente / Proveedor</label>
+            <input type="text" id="facturaTercero" required class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">NIF / CIF</label>
+            <input type="text" id="facturaNif" required class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+
+        <div class="grid grid-cols-3 gap-3">
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">Base (€)</label>
+            <input type="number" step="0.01" id="facturaBase" oninput="calcularTotalesModal()" required class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">% IVA</label>
+            <input type="number" id="facturaIvaPct" value="21" oninput="calcularTotalesModal()" class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+          <div>
+            <label class="block text-xs font-semibold text-slate-600 mb-1">% IRPF</label>
+            <input type="number" id="facturaIrpfPct" value="0" oninput="calcularTotalesModal()" class="w-full border rounded-lg p-2 text-xs outline-none focus:ring-2 focus:ring-indigo-500">
+          </div>
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Total Calculado (€)</label>
+          <input type="text" id="facturaTotal" readonly class="w-full border bg-slate-50 rounded-lg p-2 text-xs font-bold text-slate-700">
+        </div>
+
+        <div>
+          <label class="block text-xs font-semibold text-slate-600 mb-1">Documento Adjunto (Opcional)</label>
+          <input type="file" id="facturaAdjunto" class="w-full text-xs text-slate-500 file:mr-3 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+        </div>
+
+        <div class="flex justify-end space-x-2 pt-2">
+          <button type="button" onclick="cerrarModalFactura()" class="px-4 py-2 border rounded-lg text-xs font-semibold text-slate-600 hover:bg-slate-50">Cancelar</button>
+          <button type="submit" id="btnGuardar" class="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-semibold hover:bg-indigo-700 shadow">Guardar</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

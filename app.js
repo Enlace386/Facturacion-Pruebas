@@ -387,18 +387,6 @@ function calcularTotalesModal() {
   const base = parseFloat(document.getElementById('facturaBase').value) || 0;
   const ivaPct = parseFloat(document.getElementById('facturaIvaPct').value) || 0;
   const irpfPct = parseFloat(document.getElementById('facturaIrpfPct').value) || 0;
-  const numero = document.getElementById('facturaNumero').value.trim();
-  const tercero = document.getElementById('facturaTercero').value.trim();
-  const nif = document.getElementById('facturaNif').value.trim();
-  if (!fecha || Number.isNaN(Date.parse(fecha)) || !numero || !tercero || !nif ||
-      !Number.isFinite(base) || base < 0 || !Number.isFinite(ivaPct) ||
-      !Number.isFinite(irpfPct) || ivaPct < 0 || ivaPct > 100 || irpfPct < 0 || irpfPct > 100) {
-    alert('Revisa los datos: fecha, número, tercero, NIF, base e impuestos deben ser válidos.');
-    btnGuardar.disabled = false;
-    btnGuardar.innerText = 'Guardar';
-    return;
-  }
-
   const cuotaIva = base * (ivaPct / 100);
   const cuotaIrpf = base * (irpfPct / 100);
   const total = base + cuotaIva - cuotaIrpf;
@@ -420,11 +408,24 @@ async function guardarFactura(e) {
   const fecha = document.getElementById('facturaFecha').value;
   if (!['emitida', 'recibida'].includes(tipo)) {
     alert('Tipo de factura no válido.');
+    btnGuardar.disabled = false;
+    btnGuardar.innerText = 'Guardar';
     return;
   }
   const base = parseFloat(document.getElementById('facturaBase').value) || 0;
   const ivaPct = parseFloat(document.getElementById('facturaIvaPct').value) || 0;
   const irpfPct = parseFloat(document.getElementById('facturaIrpfPct').value) || 0;
+  const numero = document.getElementById('facturaNumero').value.trim();
+  const tercero = document.getElementById('facturaTercero').value.trim();
+  const nif = document.getElementById('facturaNif').value.trim();
+  if (!fecha || Number.isNaN(Date.parse(fecha)) || !numero || !tercero || !nif ||
+      !Number.isFinite(base) || base < 0 || !Number.isFinite(ivaPct) ||
+      !Number.isFinite(irpfPct) || ivaPct < 0 || ivaPct > 100 || irpfPct < 0 || irpfPct > 100) {
+    alert('Revisa los datos: fecha, número, tercero, NIF, base e impuestos deben ser válidos.');
+    btnGuardar.disabled = false;
+    btnGuardar.innerText = 'Guardar';
+    return;
+  }
 
   const cuotaIva = base * (ivaPct / 100);
   const cuotaIrpf = base * (irpfPct / 100);
@@ -503,7 +504,7 @@ async function eliminarFactura(id) {
 function protegerCeldaCSV(valor) {
   let texto = String(valor ?? '');
   // Neutraliza fórmulas de Excel/LibreOffice introducidas en campos de texto.
-  if (/^[\\s\\u0000-\\u001f]*[=+@-]/.test(texto)) texto = "'" + texto;
+  if (/^[\s\u0000-\u001f]*[=+@-]/.test(texto)) texto = "'" + texto;
   return '"' + texto.replace(/"/g, '""') + '"';
 }
 
@@ -521,7 +522,7 @@ function exportarExcelGestoria() {
     numeroSeguro(f.cuotaIva).toFixed(2), numeroSeguro(f.irpfPct).toFixed(2),
     numeroSeguro(f.cuotaIrpf).toFixed(2), numeroSeguro(f.total).toFixed(2)
   ]));
-  const csv = '\\uFEFF' + filas.map(fila => fila.map(protegerCeldaCSV).join(';')).join('\\r\\n');
+  const csv = '\uFEFF' + filas.map(fila => fila.map(protegerCeldaCSV).join(';')).join('\r\n');
   const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
   const url = URL.createObjectURL(blob);
   const link = document.createElement('a');
